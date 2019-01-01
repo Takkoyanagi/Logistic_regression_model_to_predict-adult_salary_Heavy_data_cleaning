@@ -1,0 +1,400 @@
+---
+title: "Logistic Regression Project"
+output: html_notebook
+---
+
+#### Continuation of <i>R for data science and machine learning</i>- taught by Jose Portilla
+### [Dataset obtained from UCI adult salary dataset](https://archive.ics.uci.edu/ml/datasets.html) 
+### Determine whether a given class makes <= 50K or >50K a year
+Let's begin by first loading the necessary Packages and dataset
+```{r}
+setwd("C:/Users/takko/Desktop/Github/ML_Logistic_regression")
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+library(Amelia)
+library(plotly)
+library(janitor)
+library(caTools)
+theme_set(theme_bw())
+# Load files
+df <- read.csv('adult_sal.csv')
+
+#Check the data
+head(df)
+
+#remove extra X column
+df <- select(df, -X)
+
+#check data, confirm X1 column is removed.
+head(df)
+```
+
+# Split the dataset into train and test set 75% and 25%, respectively
+```{r}
+#split train and test data
+set.seed(101)
+sample <- sample.split(df$income, 0.75)
+train <- subset(df, sample == TRUE)
+test <- subset(df, sample == FALSE)
+# quick analysis of the data
+str(train)
+summary(train)
+```
+
+# <b>EDA & HEAVY DATA CLEANING</b>
+### Looks like there are a lot of factor levels in occupation, country, 
+### type_employer, marital, race, age, fnlwgt, relationship, capital_gain,
+### education, and hr_per_week
+### Plan: Group some of these factors to reduce levels
+```{r}
+# first, convert income to binary
+train$income <- ifelse(train$income == '<=50K',0,1)
+
+# and convert necessary features to factors
+train$type_employer <- as.factor(train$type_employer)
+train$country <- as.factor(train$country)
+train$marital <- as.factor(train$marital)
+train$income <- sapply(train$income, factor) #for fun, convert it in a different way
+
+```
+
+# Begin reducing factor levels for 'marital'
+```{r}
+#let's take a look at the different levels of factor levels in marital
+table(train$marital)
+
+# then plot to see if we can group some cat. together
+ggplot(train, aes(marital, fill = income)) + geom_histogram(stat = 'count', position = 'dodge')
+```
+# Judging from the above plot, splitting into "married" and "single" makes sense. Write a function to group some of these categories together
+```{r}
+# let's combine the categories to either married or single
+married <- function(mar){
+  mar <- as.character(mar)
+  if (mar == 'Married-AF-spouse'| mar == 'Married-civ-spouse'){
+    return ('Married')
+  }else{
+    return ('Single')
+  }
+}
+
+train$marital <- as.factor(sapply(train$marital, married))
+test$marital <- as.factor(sapply(test$marital, married))
+table(train$marital)
+```
+# Now let's move one to 'type_employer'
+```{r}
+table(train$type_employer)
+ggplot(train, aes(type_employer, fill = income)) + geom_histogram(stat = 'count', position = 'dodge')
+
+```
+# Let's combine 'Local-gov' with 'State-gov' as "LS-gov" and 'Never-worked' with 'Without-pay' as "umemp". Create another function to group 'type_employer' categories
+```{r}
+# Let's combine Local-gov with State-gov as LS-gov
+gr_gov <- function(gov){
+  gov <- as.character(gov)
+  if (gov == 'Local-gov' | gov == 'State-gov') {
+    return ('LS-gov')    
+  }else if(gov == 'Never-worked'| gov =='Without-pay') {
+    return ('unemp')
+  }else{
+    return (gov)
+  }
+}
+
+train$type_employer <- as.factor(sapply(train$type_employer, gr_gov))
+table(train$type_employer)
+test$type_employer <- as.factor(sapply(test$type_employer, gr_gov))
+```
+# Time to group 'countries' by continent
+### -"Asia"
+### -"North_America"
+### -"Europe"
+### -"Latin_and_South_America"
+### -"Other"
+```{r}
+# Next group country
+# seperate by region
+Asia <- c('China','Hong','India','Iran','Cambodia','Japan', 'Laos' ,
+          'Philippines' ,'Vietnam' ,'Taiwan', 'Thailand')
+
+North_America <- c('Canada','United-States','Puerto-Rico' )
+
+Europe <- c('England' ,'France', 'Germany' ,'Greece','Holand-Netherlands','Hungary',
+            'Ireland','Italy','Poland','Portugal','Scotland','Yugoslavia')
+
+Latin_and_South_America <- c('Columbia','Cuba','Dominican-Republic','Ecuador',
+                             'El-Salvador','Guatemala','Haiti','Honduras',
+                             'Mexico','Nicaragua','Outlying-US(Guam-USVI-etc)','Peru',
+                             'Jamaica','Trinadad&Tobago')
+Other <- c('South')
+
+group_country <- function(country){
+  if (country %in% Asia){
+    return ("Asia")
+  }else if (country %in% North_America){
+    return ("North_America")
+  }else if(country %in% Europe){
+    return ('Europe')
+  }else if (country %in% Latin_and_South_America){
+    return ('Latin_and_South_America')
+  }else{
+    return ('Other')
+  }
+}
+
+train$country <- as.factor(sapply(train$country, group_country))
+table(train$country)
+test$country <- as.factor(sapply(test$country, group_country))
+
+```
+# Moving on to Age into four categories: "young", "prime", "veteran","retired"
+```{r}
+# Let's check if the categories aligns with income
+ggplot(train, aes(age, fill = income)) + geom_histogram(stat = 'count', position = 'dodge')
+```
+
+```{r}
+# Now let's group the Age
+gr_age <- function(age){
+  age <- as.numeric(age)
+  if (age<22){
+    return('young')
+  }else if (age < 37){
+    return('prime')
+  }else if(age < 55){
+    return('veteran')
+  }else{
+    return ('retired')
+  }
+}
+
+train$age <- as.factor(sapply(train$age, gr_age))
+test$age <- as.factor(sapply(test$age, gr_age))
+table(train$age)
+```
+# Onwards to 'fnlwgt'
+```{r}
+# How does fnlwgt look?
+ggplot(train, aes(fnlwgt, fill = income)) + geom_histogram(position = 'dodge') 
+```
+# No real trend of 'fnlwgt' with 'income.' Let's divide it into 3 categories using the max() function
+```{r}
+#no real trend, create 3 categories (low, med, high)
+# use the max(train$fnlwgt)/3 
+
+wgt <- function(fnl){
+  if (fnl < 494902){
+    return('low')
+  }else if (fnl < 989803){
+    return('med')
+  }else{
+    return('high')
+  }
+}
+
+train$fnlwgt <- as.factor(sapply(train$fnlwgt, wgt))
+test$fnlwgt <- as.factor(sapply(test$fnlwgt, wgt))
+
+```
+# One would imagine 'education' should be a good predictor for 'income'
+```{r}
+# Reduce education categories
+ggplot(train, aes(education, fill = income)) + geom_histogram(stat = 'count', position = 'dodge')
+
+```
+# Judging from the plot, we can group 'education' into 3 categories
+### -"elementary" for education up to 12th 
+### -"assoc" to combine Assoc-acdm and Assoc-voc
+### -"doc" for doctorate and prof-school.
+```{r}
+elementary <- c('10th', '11th', '12th','1st-4th','5th-6th','7th-8th', '9th','Preschool')
+assoc <- c('Assoc-acdm','Assoc-voc')
+doc <- c('Doctorate', 'Prof-school')
+
+educ <- function(ed){
+  ed<-as.character(ed)
+  if (ed %in% elementary){
+    return('elementary')
+  }else if(ed %in% assoc){
+    return('assoc')
+  }else if(ed %in% doc){
+    return ('doc')
+  }else{
+    return(ed)
+  }
+}
+
+train$education <- as.factor(sapply(train$education, educ))
+test$education <- as.factor(sapply(test$education, educ))
+
+```
+# We will skip 'education_num' because if we bin the categories together, we will get something very similar to 'education'
+
+# Next, Let's see if we can group 'race' together
+```{r}
+ggplot(train, aes(race, fill = income)) + geom_histogram(stat = 'count', position = 'dodge')
+```
+# We can combine 'Amer-Indian-Eskimo' with 'Other'
+```{r}
+# combine Amer-indian-eskimo with other
+othrc<- function(race){
+  race<-as.character(race)
+  if (race=='Amer-Indian-Eskimo'){
+    return ("Other")  
+  }else{
+    return(race)
+  }
+}
+
+train$race <- as.factor(sapply(train$race,othrc))
+test$race <- as.factor(sapply(test$race, othrc))
+
+```
+# Moving on to 'Capital-gain'
+```{r}
+#capital_gain
+ggplotly(ggplot(train, aes(capital_gain, fill = income)) + geom_histogram(position = 'dodge', bins = 100) + ylim(c(0,500)))
+```
+# Plot reveals a clear trend after 7300 in 'capital_gain' with 'income'
+# Try out the interactive plot!
+```{r}
+# create 2 categories >7300 or < 7300
+cgain <- function(gain){
+  gain <- as.numeric(gain)
+  if (gain<7300) {
+    return('low')    
+  }else{
+    return('high')
+  }
+}
+
+train$capital_gain <- as.factor(sapply(train$capital_gain, cgain))
+test$capital_gain <- as.factor(sapply(test$capital_gain, cgain))
+
+```
+# Unlike 'capital_gain', 'capital_loss' shows no trend with 'income', so, skip 
+```{r}
+#capital_loss, no real trend. 
+ggplotly(ggplot(train, aes(capital_loss, fill = income)) + geom_histogram(position = 'dodge'))
+```
+# Lastly!! 'hr_per_week'
+```{r}
+# hr_per_week, split into 2 groups, < 40 and >40 hrs
+ggplotly(ggplot(train, aes(hr_per_week, fill = income)) + geom_histogram(position = 'dodge'))
+```
+# Keep it simple, "less_40hrs" an "more_40hrs"
+```{r}
+whrs <- function(whr){
+  whr <- as.numeric(whr)
+  if(whr<40){
+    return('less_40hrs')
+  }else{
+    return('more_40hrs')
+  }
+}
+
+train$hr_per_week <- as.factor(sapply(train$hr_per_week,whrs))
+test$hr_per_week <- as.factor(sapply(test$hr_per_week, whrs))
+
+```
+# <b>MISSING DATA time</b>
+```{r}
+# replace '?' with NA 
+train[train == '?'] <- NA
+test[test == '?'] <- NA
+#lets check one
+table(train$occupation)
+
+#entries for '?' is gone, let's confirm NA values
+table(is.na(train$occupation))
+
+#Let's tabulate NA values
+missmap(train, y.at = c(1), y.labels = c(''), col = c('yellow','black'))
+```
+# A/B testing: We will decided whether dropping rows with NA values or dropping the 'occupation' and 'type_employer' columns is better for model prediction.
+```{r}
+train_omit <- na.omit(train)
+test_omit <- na.omit(test)
+
+# check the training set for removal of NA values
+missmap(train_omit, y.at = c(1), y.labels = c(''), col = c('yellow','black'))
+```
+# Logistic Regression Model (quick confirmation using step function to identify any unnecessary features)
+### Note, 'fnlwgt' was omitted after step function was performed.
+```{r}
+model1 <- glm(income ~., binomial(logit), train_omit)
+summary(model1)
+
+```
+```{r}
+new_step_model1 <- step(model1)
+summary(new_step_model1)
+```
+# Test the prediction with the step model!
+```{r}
+test_omit$predicted_income <- predict(new_step_model1, test_omit, type='response')
+table(test_omit$income, test_omit$predicted_income > 0.5)
+```
+# Let's determine the accuracy, precision and recall
+```{r}
+#accuaracy
+cat("accuracy:", (5356+1125)/(5356+412+783+1125))
+
+#precision
+print(paste0("precision: ", (1125)/(1125+412)))
+
+#recall
+cat("recall:", (1125)/(1125+783))
+
+```
+
+# Alternative: dropping columns
+```{r}
+train_drop <- select(train, -occupation, -type_employer)
+names(train_drop)
+test_drop <- select(test, -occupation, -type_employer)
+
+model2 <- glm(income~., binomial(logit), train_drop)
+test_drop$predicted <- predict(model2, select(test_drop, -income), type = 'response')
+table(test_drop$income, test_drop$predicted>0.5)
+```
+# Let's compare the accuracy, precision, recall
+```{r}
+#accuaracy
+cat("accuracy:", (5801+1035)/(5801+379+925+1035))
+
+#precision
+print(paste0("precision: ", (1035)/(1035+379)))
+
+#recall
+cat("recall:", (1035)/(1035+925))
+```
+# Surprisingly, dropping the columns only had a minor drop in accuracy and recall. A/B Test result: drop NA rows for greater predictive power.
+
+
+# Let's end with a comparison with a more complex model: Random Forest
+```{r}
+library(randomForest)
+
+rFmodel <- randomForest(income~., ntree = 30,train_omit)
+test_omit$rFpredict <- predict(rFmodel, select(test_omit, -income))
+table(test_omit$income, test_omit$rFpredict)
+
+```
+```{r}
+#Just looking at accuracy
+cat('accuracy: ', (5359+1153)/(5359+1153+409+755))
+```
+## 10,30,100,300 ntree were examined for the model. Surprisingly, no improvement in predictive potential was observed after 30 trees were selected.
+
+
+## Wow that was a lot of data cleaning! One thing to note, the logistic regression model performed as well as the more computationally heavy Random Forest Model. It really proves to show that you may get good predictions with a plain logistic regression.
+
+
+## Additionally, the predictive power of any model should increase if the dataset contained more data of people making more than 50K. 
+## Thank you for reading my analysis -Tak
+
+
+
